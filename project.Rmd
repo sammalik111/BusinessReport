@@ -1,0 +1,245 @@
+---
+title: "Individual Project"
+author: "Shahmeer Malik"
+date: "2023-04-21"
+
+output: prettydoc::html_pretty
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{css, echo=FALSE}
+.main-content h1, .main-content h2, .main-content h3, .main-content h4, .main-content h5, .main-content h6{
+color:black;
+font-weight:bold;
+
+}
+.page-header {
+    color: #fff;
+    text-align: center;
+    background-color: black;
+    background-image: linear-gradient(90deg,#D86018,black);
+    padding: 1.5rem 2rem;
+}
+```
+
+```{r, echo=FALSE, include=FALSE}
+library(class)
+library(stringr)
+library(kernlab)
+library(C50)
+library(gmodels)
+library(neuralnet)
+library(glmnet)
+library(caret)
+library(ggplot2)
+```
+
+# INTRODUCTION 
+
+Telemarketers will spend hours on the phone calling individuals to promote and sell a product or service to customers.  Most of the time, the telemarketers are met with many rejections from their clients, roughly 90% of the calls are unsuccessful.  In few cases, they actually succeed in selling their product or service.  Our team will be acting as consultants for a telemarketing firm to create a model to help solve the issue of profitability of call centers.  Each call made costs $1 to make and each successful call generates $6 in revenue for the firm. We will create a model composed of 3 different sub-models (Logistic Regression Model with backwards stepwise regression, SVM model and Decision Tree modeling), to predict, based on the variables, the likelihood of an individual subscribing to a campaign in order make the business profitable. If we can predict whether a customer is likely to buy or not, we can focus our tele-marketing efforts towards more willing buyers and save/make a ton of money.
+
+The data set consists of 41188 data points separate into 22 variables.  Before we can work with the data, we needed to clean the data set.
+
+# READ AND CLEAN THE DATA
+
+```{r}
+telefile <- read.csv("tele copy.csv", stringsAsFactors = TRUE)
+summary(telefile)
+# Clean data a bit
+telefile$X <- NULL
+telefile$duration <- NULL
+# Create dummy for pdays
+telefile$pdaysdummy <- ifelse(telefile$pdays == 999, 0, 1)
+telefile$pdays <- NULL
+
+
+telefile$education <- NULL
+telefile$euribor3m <- NULL
+telefile$marital <- NULL
+telefile$campaign <- NULL
+telefile$day_of_week <- NULL
+telefile$month <- NULL
+telefile$contact <- NULL
+str(telefile)
+```
+
+# CONVERTING FACTORS INTO DUMMY VARIABLES 
+
+```{r}
+telemm <- as.data.frame(model.matrix(~.-1,telefile))
+str(telemm)
+```
+
+# NORMALIZING AND CREATING TEST AND TRAIN SET
+
+In order to make the data more streamlined and easier to work on, the best approach would be to normalize all the data, then create a test set from the normalized data which is half the size of the original on a predetermined seed of "12345". After, we remove the yyes column from the test set and create a train and test for the original data and remove the yyes column from it. They will be stored separately in a label list for each train and test that will be added back for each different prediciton model.
+
+```{r}
+# Randomize the rows in the data (shuffling the rows)
+set.seed(12345)
+tele_random <- telemm[sample(nrow(telemm)),]
+#Normalize the data
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+# We are going to normalize everything 
+tele_norm <- as.data.frame(lapply(tele_random, normalize))
+# Select 50% of the total number of rows for test data
+set.seed(12345)
+test_set <- sample(1:nrow(tele_norm), nrow(tele_norm)*0.5) 
+# Create a train set and test set
+#First the predictors - all columns except the yyes column
+tele_train <- tele_norm[-test_set, -match("yyes",names(tele_norm))]
+tele_test  <- tele_norm[test_set, -match("yyes",names(tele_norm))]
+#Now the response (aka Labels) - only the yyes column
+tele_train_labels <- tele_norm[-test_set, "yyes"]
+tele_test_labels  <- tele_norm[test_set, "yyes"]
+```
+
+
+# LOGISTIC REGRESSION
+
+Now that we have the data, we'll create a logistical regression model and apply that to step wise backward regression. well make predictions using the optimization and if the value is over 0.5 for each iteration, then we set the value to 1, otherwise its 0. This will convert the prediction into a binary model of 0 and 1 after factorizing to be used later.
+
+```{r, cache = FALSE, echo=FALSE}
+tele_test$yyes <- tele_test_labels
+tele_train$yyes <- tele_train_labels
+# First, fit a full logistic regression model using all predictor variables
+logistics_m <- glm(yyes ~ ., data = tele_train, family = "binomial")
+
+# Use stepwise backward regression to select variables for the model
+logistics_m_backward <- step(logistics_m, direction = "backward")
+
+# Make predictions on the test data using the model with selected variables
+logisticsPred <- predict(logistics_m_backward, tele_test, type = "response")
+logisticsPred <- ifelse(logisticsPred >= 0.5, "1", "0")
+logisticsPred <- as.factor(logisticsPred)
+names(logisticsPred) <- NULL
+
+# Calculate confusion matrix to evaluate model performance
+logisticsMatrix <- confusionMatrix(logisticsPred, as.factor(tele_test_labels), positive = "1")
+
+```
+
+# SVM model
+
+In order to create the most efficient SVM model we can, this system creates three 3 different predictions for an RBFdot, laplacedot, and polydot kernel. After creating a confusion matrix for all the data, the program stores the matrices of every kernel prediction into a list along with a separate list parallel to the matrices that corresponds to each of their accuracies. 
+
+```{r, echo=FALSE}
+# Load the required libraries
+library(e1071)
+library(caret)
+
+tele_train$yyes <- tele_train_labels
+tele_test$yyes <- tele_test_labels
+
+
+# Fit SVM model using rbfdot kernel
+svm_rbf <- ksvm(as.factor(yyes) ~., data=tele_train, kernel = "rbfdot")
+svm_rbf_pred <- predict(svm_rbf, tele_test)
+svm_rbf_matrix <- confusionMatrix(svm_rbf_pred, as.factor(tele_test_labels), positive = "1")
+
+# Fit SVM model using laplacedot kernel
+svm_laplace <- ksvm(as.factor(yyes) ~., data=tele_train, kernel = "laplacedot")
+svm_laplace_pred <- predict(svm_laplace, tele_test)
+svm_laplace_matrix <- confusionMatrix(svm_laplace_pred, as.factor(tele_test_labels), positive = "1")
+
+# Fit SVM model using polynomial kernel
+svm_poly <- ksvm(as.factor(yyes) ~., data=tele_train, kernel = "polydot")
+svm_poly_pred <- predict(svm_poly, tele_test)
+svm_poly_matrix <- confusionMatrix(svm_poly_pred, as.factor(tele_test_labels), positive = "1")
+
+# Choose SVM model with highest accuracy
+svm_matrices <- list(svm_rbf_matrix, svm_laplace_matrix, svm_poly_matrix)
+svm_accuracies <- sapply(svm_matrices, function(x) x$overall[1])
+```
+
+# CHOOSE BEST SVM 
+
+Next, we find the index in the list of accuracies that has the highest value and we create a separate "BEST SVM" prediction and matrix equivalent to the matrix at that index of the list of matrices. We will also create a confusion matrix for this to be reported in a later stage.
+
+```{r}
+bestSVM_index <- which.max(svm_accuracies)
+bestSVM_pred <- switch(bestSVM_index,
+                       svm_rbf_pred,
+                       svm_laplace_pred,
+                       svm_poly_pred)
+bestSVM_matrix <- confusionMatrix(svm_poly_pred, as.factor(tele_test_labels), positive = "1")
+```
+
+
+# DECISION TREE
+
+The same methodology as the previous two prediction models will be applied for a decision tree prediction scheme. 
+
+```{r}
+tele_train$yyes <- tele_train_labels
+tele_test$yyes <- tele_test_labels
+decisionTreeModel <- C5.0(as.factor(yyes) ~ ., data = tele_train)
+decisionTreePred <- predict(decisionTreeModel, tele_test)
+plot(decisionTreeModel, subtree=5)
+decisionTreeMatrix <-confusionMatrix(decisionTreePred, as.factor(tele_test_labels), positive="1")
+```
+
+
+# COMBINE ALL THREE MODELS INTO ONE
+
+All the confusion matrices accuracies are printed here to show what they looked like before being joined into one model. It's observed that the logisitics model has an accuracy of 89.85%, the SVM model has an accuracy of 89.70% and the decision tree has an accuracy of 89.88%. 
+
+```{r}
+logisticsMatrix
+bestSVM_matrix
+decisionTreeMatrix
+```
+
+# CREATE A CONFUSION MATRIX
+
+Each of the prediction models will now be combined into one. They are all added together and if ALL the values of a index of the new model is 3, it means every single model predicted this instance would say yes to if we called them regarding our service. Now that we have a combined model, we can output the newly found matrix and the accuracy of the model.
+
+```{r}
+# Combine the predictions using voting, but only predict a 1 if all three models predict a 1
+
+ensemble_pred <- ifelse( as.numeric(bestSVM_pred) + as.numeric(logisticsPred) + as.numeric(decisionTreePred)  == 3, 0, 1)
+
+# Create a confusion matrix
+ensemble_matrix <- confusionMatrix(as.factor(ensemble_pred), as.factor(tele_train_labels), positive="1")
+# View the confusion matrix
+ensemble_matrix
+```
+
+# EXAMPLE
+
+We want to see on a smaller scale of 10 people who to call to ask if they would be interested in signing up for our provided service. To do this, well take a subset of a random 10 people in our data set and apply to model specifically to them. In this randomly shown set, its seen that that the model would recommend not calling any of these 10 people. Only one of these people would have signed up which the model would have lost money on but the time not wasted on the other 9 would lead to more time instead used on people that actually would sign up for the service. 
+
+```{r}
+# Set seed for reproducibility
+set.seed(12345)
+
+# Randomly select 10 rows from tele_test
+random_subset <- tele_test[sample(nrow(tele_test), 10), ]
+random_subset_labels <- tele_test_labels[sample(nrow(tele_test), 10)]
+
+# Make predictions on the subset using the model with selected variables
+logisticsPred_subset <- predict(logistics_m_backward, random_subset, type = "response")
+logisticsPred_subset <- ifelse(logisticsPred_subset >= 0.5, "1", "0")
+logisticsPred_subset <- as.factor(logisticsPred_subset)
+names(logisticsPred_subset) <- NULL
+
+logisticsPred_subset
+# Calculate confusion matrix to evaluate model performance on the subset
+logisticsMatrix_subset <- confusionMatrix(logisticsPred_subset, as.factor(random_subset_labels), positive = "1")
+logisticsMatrix_subset
+
+```
+
+
+# CONCLUSION 
+
+This model can be very useful in finding the likelihood of a customer accepting the call centers offer to sign up for their product. With 86% accuracy, this model can predict which customers are most likely to sign up for their service. it will significantly improve the significant fail rate of the business, resulting in less wasted time, and more profit overall calling new customers that actually generate revenue for them.  
